@@ -13,6 +13,7 @@ Checking your bank account and looking after your savings can be cumbersome.
   <summary>Table of Contents</summary>
   <ol>
     <li><a href="#features">Features</a></li>
+    <li><a href="#what-is-1337coin">What is 1337coin?</a></li>
     <li><a href="#before-you-start-staying-safe">Before You Start: Staying Safe</a></li>
     <li><a href="#installation">Installation</a></li>
     <li>
@@ -47,7 +48,9 @@ Checking your bank account and looking after your savings can be cumbersome.
 - Wallet PIN button
 - Intuitive, configurable hotkeys
 - Advanced security features
-<!-- Adding a GBI safety verification/badge if they support it -->
+
+## What is 1337coin?
+`1337coin` is a crypto stablecoin available on multiplayer, created and managed by Plu70. His hard work allows players to use his coin as a safe haven, we're all very grateful! <3
 
 ## Before You Start: Staying Safe
 `SCRIP` uses your wallet credentials and 1337coin username to work. User safety is very important to me, and I have implemented [strict security features.](#security)
@@ -71,7 +74,11 @@ If you want an extra layer of security, leave some or all of these credentials a
 
 When you launch the script, you will see a popup with your coin's name. **Make sure it's there and spelled correctly every time before entering your credentials.**
 
-After entering your credentials, you should see the main screen, which is updated every few seconds.
+After entering your credentials, you should see the main screen, which is updated every few seconds. You can then press `D` to start trading, `X` to cancel, or `E` to confirm the trade. Alternatively, press `A` to auto trade.
+
+A trade in angle brackets like \<+¢1 -$137\> is not confirmed yet, you can change the amount by using `WASD`.
+
+A trade in parentheses like (+¢1 -$137) is confirmed but pending. If it seems stuck like that, you should change the `1337coin` bank state through `credi7` by pressing `C`.
 
 ### Keybinds
 | Key | Command             |
