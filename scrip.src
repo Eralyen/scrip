@@ -1,0 +1,960 @@
+//=================SCRIP v1.0====================
+// A tiny 1337coin trading widget by Eralyen
+// License: MIT
+// https://github.com/Eralyen/SCRIP
+
+//=================SETTINGS======================
+// Edit this section before compiling
+
+//------CREDENTIALS-----
+
+// Required: create a coin and write its credentials here
+COIN_NAME    = null
+COIN_USR     = null
+COIN_PWD     = null
+COIN_SW_USR  = null
+COIN_SW_PWD  = null
+
+// SCRIP password: optional, but recommended. Cannot contain spaces, 4-20 characters.
+// Note: if you change it, you need to both change it here and in your subwallet info
+// Using the password manager menu (or your own script)
+PASSWORD     = null
+
+// Adding these credentials is optional
+// If you left PASSWORD = null, then WALLET_PWD also needs to be null
+// (you need some sort of password to login)
+// Besides that, you can freely choose what to enter and what to leave null
+// If you leave any of them null, you will have to enter them at runtime
+WALLET_USR   = null
+WALLET_PWD   = null
+L337COIN_USR = null
+
+//-------MISC-----------
+
+CREDI7_PATH  = "/bin/credi7"
+
+// Minimum cash to keep on hand for the buy-all and auto-trade actions
+BUY_ALL_TARGET   = 1000
+AUTO_TRADE_TARGET = 1000
+
+// Seconds between input polling
+LOOP_WAIT_SECONDS = 0.1  
+
+// Seconds between the balance checks
+BALANCE_REFRESH = 5
+
+// Seconds between verifying cloud password during normal operations
+CLOUD_PASS_VERIFY = 60
+
+// Display a heartbeat when the balances get refreshed
+HEARTBEAT = false
+
+// Ask for confirmation before logging in
+CHECK_POPUP = true
+
+// When this many consecutive incorrect login attempts are reached, SCRIP will be locked down and you will have to prove your identity.
+MAX_LOGIN_ATTEMPTS = 5
+
+// Public IP whitelist, disabled by default. Example: IP_WHITELIST = ["200.200.200.200", "100.101.102.103"]
+IP_WHITELIST = []
+
+
+//-------KEYBINDS-------
+
+KB_BUY_ALL    = "W"
+KB_AUTO_TRADE = "A"
+KB_SELL_ALL   = "S"
+KB_TRADE      = "D"
+KB_CREDI7     = "C"
+KB_PIN        = "P"
+KB_HEARTBEAT  = "H"
+KB_CLOUD      = "L"
+KB_CONFIRM    = "E"
+KB_CANCEL     = "X"
+KB_QUIT       = "Q"
+KB_REFRESH    = " "
+
+KB_INC_10     = "W"
+KB_DEC_1      = "A"
+KB_DEC_10     = "S"
+KB_INC_1      = "D"
+
+
+//=================SYSTEM-SETTINGS===============
+// Don't touch these unless you know what you're doing
+
+WIDTH  = 18
+HEIGHT = 7
+WIDTH_PX = 180
+EXCHANGE_RATE = 137
+INFINITY = 1000000000000
+
+//-----------------CONSTANTS---------------------
+
+MODE_DISPLAY  = 0
+MODE_TRADING  = 1
+MODE_AUTO     = 2
+MODE_PENDING  = 3
+MODE_EXECUTE  = 4
+
+//-----------------BALANCE-TRADING---------------
+// These methods would probably fit inside the class Scrip
+// But I chose to leave them outside in case people want to reuse them
+// They're easier to decouple from this script's logic this way
+
+// Returns true if bank_balance > coins * rate, i.e. if a purchase could be made
+testBalance = function(wallet, coins, rate)
+    success = wallet.buy_coin(COIN_NAME, coins, rate, COIN_SW_USR)
+    return success[:48] != "Purchase failed: Insufficient money in the bank."
+end function
+
+// Returns the bank balance. See the README page for more information
+getBankBalance = function(wallet)
+    wallet.buy_coin(COIN_NAME, 1, 1, COIN_SW_USR)
+
+    cash = 0
+    if testBalance(wallet, 1, 1) then
+        bound = 50000
+        low = 1
+        rate = 1
+        while testBalance(wallet, bound, rate)
+            if rate >= 10000 then break
+            rate = rate * 10
+        end while
+
+        if rate >= 10000 and testBalance(wallet, bound, rate) then
+            cash = (10000 * 50000) + 1
+        else
+            if rate > 1 then low = 5000
+        
+            high = bound
+            while low < high
+                mid = floor((low + high + 1) / 2)
+                if not testBalance(wallet, mid, rate) then
+                    high = mid - 1
+                else
+                    low = mid
+                end if
+            end while
+            cash = low * rate
+        end if
+    end if
+    wallet.cancel_pending_trade(COIN_NAME)
+    return cash
+end function
+
+get1337coinBalance = function(wallet)
+    return wallet.get_balance("1337coin")
+end function
+
+getPendingTrade = function(wallet)
+    pending = wallet.get_pending_trade("1337coin")
+    if typeof(pending) != "list" then return null
+
+    sign = 1
+    if pending[0] == "Sell" then sign = -1
+
+    coins  = sign * pending[1]
+    rate = pending[2]
+
+    return [coins, rate]
+end function
+
+executeTrade = function(wallet, n)
+    // Max coin cap
+    if n > 99 then
+        trade = 99
+    else if n < -99 then
+        trade = -99
+    else
+        trade = n
+    end if
+
+    if trade > 0 then
+        wallet.buy_coin("1337coin", trade, EXCHANGE_RATE, L337COIN_USR)
+    else if trade < 0 then
+        wallet.sell_coin("1337coin", -trade, EXCHANGE_RATE, L337COIN_USR)
+    end if
+end function
+
+capTrade = function(trade, cash, coins)
+    if trade + coins < 0 then
+        trade = -coins
+    else if -trade * EXCHANGE_RATE + cash < 0 then
+        trade = floor(cash/EXCHANGE_RATE)
+    end if
+    return trade
+end function
+
+//-----------------MISC-UTILS--------------------
+
+max = function(a, b)
+    if a > b then return a
+    return b
+end function
+
+min = function(a, b)
+    if a < b then return a
+    return b
+end function
+
+clamp = function(n, m, M)
+    if n > M then return M
+    if n < m then return m
+    return n
+end function
+
+quitScript = function(msg)
+    clear_screen
+    exit(msg)
+end function
+
+launchCredi7 = function
+    credi7 = get_shell.host_computer.File(CREDI7_PATH)
+    if credi7 == null then
+        errorView("Error: credi7 binary not found", false)
+    else if not credi7.has_permission("x") then
+        errorView("Error: can't launch credi7: insufficient permissions.", false)
+    else
+        get_shell.launch("/usr/bin/Terminal.exe", CREDI7_PATH)
+    end if
+end function
+
+//-----------------UI-UTILS----------------------
+
+_ = "<alpha=#00>#<alpha=#FF>"
+
+// Takes 'txt', aligns it and returns it as a fixed length string, WIDTH visible characters long.
+// @param {string} txt       - content string
+// @param {string} alignment - "left", "right", or "center"
+// @param {string} filler    - single-character string to be used for padding. null = " "
+// @param {number} tags      - if txt contains rich text tags, 'tags' should be the amount of total characters of those tags. For example, txt = "<b>Hello</b>", tags = 7
+align = function(txt, alignment, filler = null, tags = 0)
+    if not filler or filler == " " then filler = _
+    to_fill = WIDTH + tags - txt.len
+    if to_fill < 0 then
+        txt = txt[:to_fill]
+        to_fill = 0
+    end if
+
+    if alignment == "left" then
+        return txt + (filler * to_fill)
+
+    else if alignment == "right" then
+        return (filler * to_fill) + txt
+
+    else if alignment == "center" then
+        l_filler = filler *  ceil(to_fill / 2)
+        r_filler = filler * floor(to_fill / 2)
+        return l_filler + txt + r_filler
+    end if
+end function
+
+// Given two strings, aligns them to the left and right in the same line, reaching a width of WIDTH
+alignTable = function(txt1, txt2, filler)
+    if txt1.len + txt2.len > WIDTH then return txt1+txt2
+    if not filler or filler == " " then filler = _
+
+    to_fill = WIDTH - txt1.len - txt2.len
+    return txt1 + (filler * to_fill) + txt2
+end function
+
+// Formats a given number into a string, depending on its use (ex. dollars, coins, etc)
+formatInt = function(n, format, force_sign)
+    if n == null then return null
+
+    if n < 0 then
+        sign = "-"
+    else if force_sign then
+        sign = "+"
+    else
+        sign = ""
+    end if
+    N = abs(n)
+
+    num_str = "" + N
+    num_with_commas = ""
+    while num_str.len > 3
+        num_with_commas = "," + num_str[-3:] + num_with_commas
+        num_str = num_str[:-3]
+    end while
+    num_with_commas = num_str + num_with_commas
+
+    if format == "coins" then
+        return sign + "¢" + num_with_commas
+
+    else if format == "dollars" then
+        return sign + "$" + num_with_commas
+        
+    else if format == "bankdollars" then
+        tilde = ""
+        if n > 50000 then
+            tilde = "~"
+        else if n > 500000000 then
+            tilde = ">"
+        end if
+        return tilde + sign + "$" + num_with_commas
+    
+    else if format == "pin" then
+        return "PIN: " + n
+
+    end if
+end function
+
+// Formats a trade data into a more readable form
+formatTrade = function(coins, rate, format, heartbeat = false)
+    brackets = 1 + heartbeat
+    if format == "trade" then
+        return ("<" * brackets) + formatInt(coins, "coins", true) + " " + formatInt(-coins*rate, "dollars", true) + (">" * brackets)
+    
+    else if format == "pending" then
+        return ("(" * brackets) + formatInt(coins, "coins", true) + " " + formatInt(-coins*rate, "dollars", true) + (")" * brackets)
+    end if
+end function
+
+//-----------------VIEWS-------------------------
+
+// UI view for receiving credentials
+loginView = function(mode, text, is_pw)
+    if is_pw == null then is_pw = false
+    login_str = "<width=" + WIDTH_PX + ">"    +
+                align("SCRIP", "center", "=") + " "
+    if mode == "wait" then
+        login_str = login_str +
+                align("IS THE POPUP", "left") + " " +
+                align("CORRECT? [Y/n/r]", "left")     + " " +
+                align(">", "left")            + " "
+    else
+        login_str = login_str +
+                align(text + ":", "left")     + " " +
+                align(">", "left")            + " " +
+                align("", "left")             + " "
+    end if
+    login_str = login_str +
+                ("-" * WIDTH)                 + " " +
+                align("<Login>", "center")    + " " +
+                ("=" * WIDTH)                 + " "
+
+    if mode == "input" then
+        clear_screen
+        return user_input((login_str + "<line-height=-87>" + _ + _ + "<size=80%>") , is_pw)
+        wait(0.5)
+
+    else if mode == "incorrect" then
+        print(login_str + "<line-height=-87>" + _ + _ + "Wrong password", 1)
+
+    else if mode == "wait" then
+        clear_screen
+        return user_input(login_str + "<line-height=-64>" + _ + _ , 0, 1)
+        wait(0.5)
+    end if
+end function
+
+// UI view of the main program
+scripView = function(cash, coins, value, footer)
+    scrip_str = "<width=" + WIDTH_PX + ">"    +
+                align("SCRIP", "center", "=") + " " +
+                alignTable("Bank:", cash)     + " " +
+                alignTable("1337:", coins)    + " " +
+                alignTable("Value:", value)   + " " +
+                ("-" * WIDTH)                 + " " +
+                align(footer, "center")       + " " +
+                ("=" * WIDTH)
+    return(scrip_str)
+end function
+
+// UI view of the "cloud" subwallet info security menu
+cloudView = function(mode, pw, attempts)
+    if pw == null then pw = "<null>"
+    pw_str = "[1]" + _ + "<size=80%>" + pw + "</size>"
+    pw_tags = 39
+
+    a_kb = "2"
+    if attempts == 0 then a_kb = "-"
+
+    if mode == "change_pw" then
+        pw_str = ">"
+        pw_tags = 0
+    end if
+    cloud_str = "<width=" + WIDTH_PX + ">"                                 +
+                align("SCRIP", "center", "=")                              + " " +
+                align("SCRIP PASSWORD:", "left")                           + " " +
+                align(pw_str, "left", _, pw_tags)                          + " " +
+                "<nobr>" + ("-" * WIDTH) + "</nobr>"                       + " " +
+                align("LOGIN" + _ + "ATTEMPTS:", "left", _, 22)            + " " +
+                align("[" + a_kb + "]" + _ + attempts, "left", _, 22)      + " " +
+                ("=" * WIDTH)
+    if mode == "view" then
+        return cloud_str
+    else if mode == "change_pw" then
+        return cloud_str + " <line-height=-87>" + _ + _ + "<size=80%>"
+    end if
+end function
+
+// UI view for error messages
+errorView = function(error, do_exit)
+    if error == null then error = "Unknown error."
+
+    error_str = "<color=red><width=" + WIDTH_PX + ">" +
+        align("SCRIP", "center", "=")             + " " +
+        error                                     + " " + 
+        ("=" * WIDTH)
+    
+    print(error_str, 1)
+    if do_exit then
+        exit
+    else
+        user_input("", 0, 1)
+    end if
+end function
+
+//-----------------CORE-LOGIC--------------------
+
+//-----MODE CHANGE MAP-----
+
+// DISPLAY  -> AUTO:    on keypress                                              MC-01
+// DISPLAY  -> TRADING: on keypress (TRADE, BUY-ALL or SELL-ALL)                 MC-02a, MC-02b, MC-02c
+// DISPLAY  -> PENDING: on external event (e.g. traded with the stock wallet)    MC-03
+// AUTO     -> DISPLAY: on cancel                                                MC-04
+// TRADING  -> DISPLAY: on cancel                                                MC-06
+// TRADING  -> EXECUTE: on keypress                                              MC-07
+// PENDING  -> DISPLAY: on cancel or automatically                               MC-08a, MC-08b
+// EXECUTE  -> DISPLAY: on cancel or automatically                               MC-09a, MC-09b 
+// ANY      -> ERROR:   automatically                                            MC-10
+// ANY      -> (QUIT):  on keypress                                              MC-11
+
+Scrip = {}
+
+// Login logic and initialization
+Scrip.login = function
+    loginLoop = function(mode, text, is_password, check, do_verify_cloud = true)
+        while true
+            if do_verify_cloud then Scrip.verifyCloud(true)
+            cred = loginView(mode, text, is_password)
+            wait(0.2)
+            if check then
+                if cred == check then
+                    return true
+                else if cred == "" then
+                    Scrip.blockchain.get_coin(COIN_NAME, COIN_USR, COIN_PWD)
+                else
+                    Scrip.increaseCloudAttempts
+                    loginView("incorrect", text)
+                    wait(1)
+                end if
+            else
+                return cred
+            end if
+        end while
+    end function
+
+    // Check SCRIP password requirements
+    if PASSWORD != null then
+        if typeof(PASSWORD) != "string" then globals.PASSWORD = str(PASSWORD)
+
+        if PASSWORD.indexOf(" ") != null then
+            errorView("Error: the SCRIP password cannot cointain spaces.", true)
+        else if PASSWORD.len > 20 or PASSWORD.len < 4 then
+            errorView("Error: the SCRIP password needs to be between 4 and 20 characters.", true)
+        end if
+    end if
+
+    // IP whitelist handling
+    if IP_WHITELIST != null and IP_WHITELIST.len > 0 then
+        ip = get_shell.host_computer.public_ip
+        if IP_WHITELIST.indexOf(ip) == null then errorView("Error: IP address " + ip + " is not in the whitelist", true)
+    end if
+    
+    // Check if the credentials have been entered
+    coin_creds = COIN_NAME and COIN_USR and COIN_PWD and COIN_SW_USR and COIN_SW_PWD
+
+    if not coin_creds then errorView("Error: missing coin credentials.", true)
+    if WALLET_PWD and not PASSWORD then errorView("Error: you need authentication to log in. Either don't hardcode your wallet password, or hardcode a SCRIP password.", true)
+
+    // Load blockchain library
+    blockchain = include_lib("/lib/blockchain.so")
+    if not blockchain then
+        blockchain = include_lib("./blockchain.so")
+        if not blockchain then
+            errorView("Error: Blockchain lib not found.", true)
+        end if
+    end if
+    self.blockchain = blockchain
+
+    // Get personal coin object
+    coin = self.blockchain.get_coin(COIN_NAME, COIN_USR, COIN_PWD)
+    if coin == null then
+        errorView("Error: Could not access coin " + COIN_NAME, true)
+    else if typeof(coin) == "string" then
+        errorView("Coin error: " + coin, true)
+    end if
+    self.coin = coin
+
+    // Lets the user check if the coin popup is correct
+    if CHECK_POPUP then
+        while true
+            resp = loginView("wait").upper
+            // Get a new popup
+            if resp == "R" then
+                self.blockchain.get_coin(COIN_NAME, COIN_USR, COIN_PWD)
+
+            else if resp == "N" then
+                errorView("Warning: your SCRIP file may be compromised. Please check your system for vulnerabilities and compile a fresh copy.", true)
+            
+            else
+                break
+            end if
+        end while
+    end if
+
+    has_subwallet = (coin.get_subwallets.len > 0)
+    if has_subwallet then
+        // Setup subwallet_info (cloud password validation and login attempts)
+        self.subwallet = coin.get_subwallet(COIN_SW_USR)
+        sw_info = self.getCloud
+        if sw_info == [null, null] then
+            if PASSWORD == null then
+                self.setCloud("null", "0")
+            else
+                self.setCloud(PASSWORD, "0")
+            end if
+        else
+            // Check if everything is nominal
+            self.verifyCloud(true)
+        end if
+    end if
+
+    if PASSWORD then loginLoop("input", "SCRIP PASSWORD", true, PASSWORD, has_subwallet)
+
+    wallet_obtained = false
+    while not wallet_obtained
+        if not WALLET_USR then globals.WALLET_USR = loginLoop("input", "WALLET USERNAME", false, null, has_subwallet)
+        if not WALLET_PWD then globals.WALLET_PWD = loginLoop("input", "WALLET PASSWORD", true, null, has_subwallet)
+
+        // Get wallet object
+        wallet = blockchain.login_wallet(WALLET_USR, WALLET_PWD)
+        if wallet == null then
+            self.increaseCloudAttempts
+            errorView("Error: could not load wallet.", false)
+            globals.WALLET_USR = null
+            globals.WALLET_PWD = null
+
+        else if typeof(wallet) == "string" then
+            self.increaseCloudAttempts
+            errorView(wallet, false)
+            globals.WALLET_USR = null
+            globals.WALLET_PWD = null
+
+        else
+            wallet_obtained = true
+            self.wallet = wallet
+        end if
+    end while
+
+    // Create a subwallet for the personal coin, if it doesn't exist
+    if not has_subwallet then
+        coin.create_subwallet(WALLET_USR, self.wallet.get_pin, COIN_SW_USR, COIN_SW_PWD)
+        errorView("Subwallet created. Restarting...", true)
+    end if
+
+    is_1337coin_usr_correct = false
+    while not is_1337coin_usr_correct
+        if not L337COIN_USR then globals.L337COIN_USR = loginLoop("input", "1337COIN USER", false)
+        
+        result = self.wallet.sell_coin("1337coin", 50000, 10000, L337COIN_USR)
+
+        if result == "Error: subwallet does not contain enough coins to sell" then
+            is_1337coin_usr_correct = true
+        else
+            self.increaseCloudAttempts
+            globals.L337COIN_USR = null
+            errorView("1337coin username not found.", false)
+        end if
+    end while
+
+    // Login was successful, so reset login attempts
+    self.resetCloudAttempts
+
+    // Initialize attributes
+    self.trade        = null   // Trade in relative terms. -2 = sell 2 coins
+    self.trade_target = null   // Trade in absolute terms.  5 = trade to achieve a balance of 5 coins.
+    self.time_start               = time
+    self.time_last_balance_update = 0
+    self.time_last_refresh        = 0
+    self.time_last_cloud_pw       = 0
+    self.cash    = null
+    self.coins   = null
+    self.pending = null
+    self.mode    = MODE_DISPLAY
+    self.last_poll = time
+    self.show_pin = false
+end function
+
+// Main program loop
+Scrip.main = function
+    while true
+        self.update
+        self.show
+        self.input
+    end while
+end function
+
+// Looks at the state and executes any necessary updates, including modes
+// Also updates cash balance, coin balance, and pending trade
+Scrip.update = function
+    self.verifyCloud
+    
+    updated = self.updateBalance(self.mode == MODE_EXECUTE or self.mode == MODE_PENDING)
+
+    if self.mode == MODE_DISPLAY and self.pending then
+        self.mode = MODE_PENDING   //MC-03
+
+    else if self.mode == MODE_PENDING and not self.pending then
+        self.mode = MODE_DISPLAY  //MC-08b
+        self.updateBalance(true)
+    
+    else if self.mode == MODE_TRADING then
+        if self.trade != null then self.trade_target = null
+        self.syncTargets
+    
+    else if self.mode == MODE_AUTO and updated then
+        self.cancelTrades
+        trade_cash = max(0, self.cash - AUTO_TRADE_TARGET)
+        self.trade = floor(trade_cash / EXCHANGE_RATE)
+        self.syncTargets
+        executeTrade(self.wallet, self.trade)
+    
+    else if self.mode == MODE_EXECUTE then
+        // Checks if trade_target reached its target
+        if self.trade_target == self.coins then
+            self.cancelTrades
+            self.mode = MODE_DISPLAY //MC-09b
+            self.updateBalance(true)
+
+        else
+            self.syncTargets
+
+            if self.trade != 0 then
+                trade = self.trade
+
+                trade = capTrade(trade, self.cash, self.coins)
+                
+                if trade > 99 then
+                    trade = 99
+                else if trade < -99 then
+                    trade = -99
+                end if
+
+                executeTrade(self.wallet, trade)
+            else
+                self.cancelTrades
+                self.mode = MODE_DISPLAY
+            end if
+        end if
+    end if
+end function
+
+// Manages the UI functions, prepares the view to display
+Scrip.show = function
+    footer = "<Trade>"
+    if self.mode == MODE_AUTO then
+        footer = "<Auto>"
+    end if
+
+    if self.heartbeat then footer = "<" + footer + ">"
+    
+    if self.show_pin then
+        footer = formatInt(self.wallet.get_pin, "pin")
+    
+    else if self.mode == MODE_TRADING then
+        footer = formatTrade(self.trade, EXCHANGE_RATE, "trade", self.heartbeat)
+    
+    else if self.mode == MODE_EXECUTE then
+        footer = formatTrade(self.trade, EXCHANGE_RATE, "pending")
+    
+    else if self.mode == MODE_PENDING then
+        footer = formatTrade(self.pending[0], self.pending[1], "pending", self.heartbeat)
+
+    end if
+
+    self.view = scripView(
+        formatInt(self.cash, "bankdollars"),
+        formatInt(self.coins, "coins"),
+        formatInt(self.coins * EXCHANGE_RATE, "dollars"),
+        footer)
+end function
+
+// Prints the view, checks for keypresses and updates the program state accordingly, including modes.
+Scrip.input = function
+    print(self.view, 1)
+    // User input
+    if self.show_pin then
+        key = null
+        user_input("", 0, 1)
+        self.show_pin = false
+    else
+        key = poll_input
+        if key == "" then key = null
+    end if
+
+    // Loop pause
+    time_passed = time - self.last_poll
+    wait(clamp(LOOP_WAIT_SECONDS - time_passed, 0.01, 300))
+    self.last_poll = time
+
+    if key != null then key = key.upper
+    
+    if key == KB_QUIT then
+        quitScript  //MC-10
+
+    else if key == KB_CREDI7 then
+        launchCredi7
+    
+    else if key == KB_HEARTBEAT then
+        globals.HEARTBEAT = not HEARTBEAT
+    
+    else if key == KB_PIN then
+        self.show_pin = true
+    
+    else if key == KB_CLOUD then
+        self.prevmode = self.mode
+        self.cloudMenu
+    
+    else if key == KB_REFRESH then
+        self.time_last_balance_update = -BALANCE_REFRESH
+    
+    else if self.mode == MODE_DISPLAY then
+        if key == KB_AUTO_TRADE then
+            self.mode = MODE_AUTO //MC-01
+        
+        else if key == KB_TRADE then
+            self.cancelTrades
+            self.mode = MODE_TRADING //MC-02a
+            self.trade = 0
+
+        else if key == KB_BUY_ALL then
+            self.cancelTrades
+            self.trade = capTrade(INFINITY, max(0, self.cash - BUY_ALL_TARGET), self.coins)
+            self.mode = MODE_TRADING //MC-02b
+        
+        else if key == KB_SELL_ALL then
+            self.cancelTrades
+            self.trade_target = 0
+            self.mode = MODE_TRADING //MC-02c
+
+        end if
+
+    else if self.mode == MODE_AUTO then
+        if key == KB_CANCEL or key == KB_AUTO_TRADE then
+            self.mode = MODE_DISPLAY //MC-04
+            self.cancelTrades
+
+        end if
+
+    else if self.mode == MODE_TRADING then
+        if key == KB_CANCEL then
+            self.mode = MODE_DISPLAY //MC-06
+            self.cancelTrades
+
+        else if key == KB_CONFIRM then
+            self.mode = MODE_EXECUTE //MC-07
+        
+        else if key == KB_INC_1 then
+            self.trade = self.trade + 1
+            
+        else if key == KB_INC_10 then
+            self.trade = self.trade + 10
+            
+        else if key == KB_DEC_1 then
+            self.trade = self.trade - 1
+            
+        else if key == KB_DEC_10 then
+            self.trade = self.trade - 10
+        end if
+
+    else if self.mode == MODE_PENDING then
+        if key == KB_CANCEL then
+            self.mode = MODE_DISPLAY //MC-08a
+            self.cancelTrades
+        
+        end if
+
+    else if self.mode == MODE_EXECUTE then
+        if key == KB_CANCEL then
+            self.mode = MODE_DISPLAY //MC-09a
+            self.cancelTrades
+        end if
+    
+    end if
+end function
+
+// Gets called when a safety feature gets tripped
+Scrip.emergencyLogin = function
+    to_check = ["COIN NAME", "COIN USER", "COIN PASSWORD", "COIN SUBWALLET ID", "COIN SUBWALLET PW", "WALLET USER", "WALLET PASSWORD", "1337COIN USER"]
+    values = []
+    for cred in to_check
+        is_pw = false
+        if ["COIN PASSWORD", "COIN SUBWALLET PW", "WALLET PASSWORD"].indexOf(cred) != null then is_pw = true
+        values.push(loginView("input", cred, is_pw))
+    end for
+    wallet = self.blockchain.login_wallet(values[5], values[6])
+    l337coin_result = false
+    if typeof(wallet) == "wallet" then
+        trade_result = wallet.sell_coin("1337coin", 50000, 10000, values[7])
+        l337coin_result = (trade_result == "Error: subwallet does not contain enough coins to sell")
+    else
+    end if
+
+    if  values[0] != COIN_NAME or
+        values[1] != COIN_USR or
+        values[2] != COIN_PWD or
+        values[3] != COIN_SW_USR or
+        values[4] != COIN_SW_PWD or
+        typeof(wallet) != "wallet" or
+        l337coin_result == false then
+            wait(2)
+            errorView("Incorrect credentials.", true)
+    else
+        self.subwallet = self.coin.get_subwallet(COIN_SW_USR)
+        self.cloudMenu
+        errorView("Cloud password updated. Please login.", false)
+    end if
+end function
+
+// Makes sure self.trade (relative amount of coins) and self.trade_target (absolute amount of coins) are in sync
+Scrip.syncTargets = function
+    if self.trade_target != null then
+        self.trade = self.trade_target - self.coins
+        self.trade = capTrade(self.trade, self.cash, self.coins)
+    else
+        self.trade = capTrade(self.trade, self.cash, self.coins)
+        self.trade_target = self.coins + self.trade
+    end if
+end function
+
+// Updates the bank balance, 1337coin balance, and checks for pending trades, if it's been at least BALANCE_REFRESH seconds from the last check or if force_update is true
+Scrip.updateBalance = function(force_update = false)
+    self.heartbeat = false
+    if force_update or (time - self.time_last_balance_update) >= BALANCE_REFRESH then
+        self.heartbeat = HEARTBEAT
+        self.cash  = getBankBalance(self.wallet)
+        self.coins = get1337coinBalance(self.wallet)
+        self.pending = getPendingTrade(self.wallet)
+        self.time_last_balance_update = time
+        return true
+    end if
+    return false
+end function
+
+// Cancels any planned or pending trades
+Scrip.cancelTrades = function
+    self.trade = null
+    self.trade_target = null
+    self.wallet.cancel_pending_trade("1337coin")
+end function
+
+// Checks whether the password changed or the login attemps are below the threshold, both from subwallet info
+Scrip.verifyCloud = function(force_verify = false)
+    if force_verify or time - self.time_last_cloud_pw >= CLOUD_PASS_VERIFY then
+        info = self.getCloud
+        self.cloud_pw = info[0]
+        self.attempts = info[1]
+
+        if self.cloud_pw != PASSWORD then
+            errorView("Error: password mismatch. Please confirm your identity.", false)
+            self.emergencyLogin
+        else if self.attempts > MAX_LOGIN_ATTEMPTS then
+            errorView("Error: too many incorrect login attempts. Please confirm your identity and change your password.", false)
+            self.emergencyLogin
+        end if
+    end if
+    return true
+end function
+
+// Menu for managing subwallet info security
+Scrip.cloudMenu = function
+    while true
+        print(cloudView("view", self.cloud_pw, self.attempts), 1)
+        key = poll_input.upper
+        wait(0.1)
+
+        if key == "1" then
+            clear_screen
+            new_pw = user_input(cloudView("change_pw", self.cloud_pw, self.attempts))
+            if new_pw == "" then new_pw = "null"
+
+            if new_pw.upper == "X" then
+                //pass I guess
+            else if new_pw.indexOf(" ") != null then
+                errorView("Error: The SCRIP password cannot contain spaces.", false)
+            else if new_pw.len > 20 or new_pw.len < 4 then
+                errorView("Error: the SCRIP password needs to be between 4 and 20 characters.", false)
+            else
+                self.setCloudPassword(new_pw)
+                self.resetCloudAttempts
+                wait(0.5)
+                errorView("Cloud password changed. Restarting...", true)
+            end if
+        else if key == "2" and self.attempts > 0 then
+            self.resetCloudAttempts
+        else if key == KB_CLOUD or key == KB_CANCEL then
+            break
+        else if key == KB_QUIT then
+            quitScript
+        end if
+    end while
+end function
+
+// Sets the subwallet info as "password attempts"
+Scrip.setCloud = function(password, attempts)
+    if password == null then password = "null"
+    res = self.subwallet.set_info(password + " " + attempts)
+    if typeof(res) == "string" then errorView(res, true)
+    self.cloud_pw = password
+    self.attempts = attempts
+    return res
+end function
+
+// Changes the password in subwallet info
+Scrip.setCloudPassword = function(password)
+    info = self.getCloud
+    if typeof(info) == "string" then return info
+    return self.setCloud(password, info[1])
+end function
+
+// Changes the incorrect login attempts in subwallet info
+Scrip.setCloudAttempts = function(attempts)
+    info = self.getCloud
+    if typeof(info) == "string" then return info
+    return self.setCloud(info[0], attempts)
+end function
+
+// Sets the incorrect login attempts in subwallet info to zero
+Scrip.resetCloudAttempts = function
+    return self.setCloudAttempts(0)
+end function
+
+// Increases the incorrect login attempts in subwallet info by one
+Scrip.increaseCloudAttempts = function
+    info = self.getCloud
+    return self.setCloud(info[0], info[1] + 1)
+end function
+
+// Obtains the subwallet info security information and returns it as a [string | null, number]
+Scrip.getCloud = function
+    res = self.subwallet.get_info
+    if res == "" then return [null, null]
+    info = res.split(" ")
+    if info.len != 2 then errorView(res, true)
+    if info[0] == "null" then info[0] = null
+    info[1] = info[1].to_int
+    return info
+end function
+
+
+//-----------------MAIN--------------------------
+
+
+Scrip.login
+
+Scrip.main
