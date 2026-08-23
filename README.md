@@ -52,7 +52,7 @@ Checking your bank account and looking after your savings can be cumbersome.
 ## What is 1337coin?
 `1337coin` is a crypto stablecoin available on multiplayer, created and managed by Plu70. His hard work allows players to use his coin as a safe haven, we're all very grateful! <3
 
-You can get it here: [https://discord.gg/VuWYdWUXQw]
+You can get it here: https://discord.gg/VuWYdWUXQw
 
 ## Before You Start: Staying Safe
 `SCRIP` uses your wallet credentials and 1337coin username to work. User safety is very important to me, and I have implemented [strict security features.](#security)
@@ -111,7 +111,7 @@ All keybinds are configurable in the `// Keybinds` section of the script.
 
 ## Security features
 ### Global Password Verification
-This script periodically verifies the hardcoded SCRIP password against the custom coin's subwallet_info. This allows you to change the password globally, which useful if you suspect that someone stole your SCRIP binary. If you change the password in subwallet_info AND recompile the script with the new password, the stolen binary will refuse to launch, and will close if already running. This feature only verifies the main SCRIP password.
+This script periodically verifies the hardcoded SCRIP password against the custom coin's subwallet_info. This allows you to change the password globally, which is useful if you suspect that someone stole your SCRIP binary. If you change the password in subwallet_info AND recompile the script with the new password, the stolen binary will refuse to launch, and will close if already running. This feature only verifies the main SCRIP password.
 
 ### Global Cap on Login Attempts
 Using a similar mechanism as above, SCRIP keeps track of unsuccessful login attempts to prevent bruteforcing attacks. If your program hits this cap unexpectedly, it means someone stole your copy of SCRIP and is trying to login. Don't panic, they should be locked out of the program, just like you are. I highly recommend checking your system's security, and then changing your password to prevent further disruptions.
