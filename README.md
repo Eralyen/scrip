@@ -52,6 +52,8 @@ Checking your bank account and looking after your savings can be cumbersome.
 ## What is 1337coin?
 `1337coin` is a crypto stablecoin available on multiplayer, created and managed by Plu70. His hard work allows players to use his coin as a safe haven, we're all very grateful! <3
 
+You can get it here: [https://discord.gg/VuWYdWUXQw]
+
 ## Before You Start: Staying Safe
 `SCRIP` uses your wallet credentials and 1337coin username to work. User safety is very important to me, and I have implemented [strict security features.](#security)
 
