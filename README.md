@@ -64,7 +64,7 @@ If you want an extra layer of security, leave some or all of these credentials a
 ## Installation
 
 1. Download `scrip.src`, but don't import it into the game yet.
-2. Register a new coin. It should not be used for anything other than for `SCRIP`.
+2. Register a new coin. (If you already have one, make sure you can register a new dedicated subwallet for `SCRIP`. That subwallet should not be used for anything other than this. The coin also must not have any pending orders, or the bank balance check will mess with them and return false information.)
 3. Hardcode the coin's credentials in the `// Credentials` section of the script.
 4. Create a new username and password for a subwallet and hardcode them, `SCRIP` will create a subwallet for you.
 5. (Recommended) Also hardcode your wallet's credentials and 1337coin username, as well as a master password. If you skip this step, you will have to enter your credentials at runtime.
